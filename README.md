@@ -31,7 +31,7 @@ La documentación distingue proveedores de decisión (Jev/TypeSafe o Liquid d1),
 - **URL de video sola:** crear una nota; preferir subtítulos disponibles y recurrir a ASR si no hay subtítulos.
 - **`!URL` de video:** crear nota y archivar también el video en R2.
 - **`!!URL` de video:** enviar solo el video al grupo privado de Telegram, sin nota ni copia a R2.
-- **Audio:** transcribir, clasificar la intención y guardar automáticamente sólo los casos clasificados como nota. Las rutas de recordatorio y mandado requieren features/reglas adicionales.
+- **Audio:** transcribir y clasificar la intención; sólo las notas se archivan como nota. Los recordatorios siguen el flujo Jev → LLM → QStash + Google Calendar y generan un log estructurado en Obsidian, sin guardar el audio.
 
 Los marcadores son prefijos reales delante de la URL; las llaves usadas en ejemplos de `BOT.md` sólo indican un marcador de posición.
 
@@ -44,4 +44,4 @@ Los marcadores son prefijos reales delante de la URL; las llaves usadas en ejemp
 
 ## Estado y siguientes pasos
 
-El roadmap detallado está al final de [BOT.md](BOT.md). La primera etapa de implementación prevista es un webhook mínimo, el parser de comandos, un worker en CPU y el flujo de captura de videos con escritura de notas en R2. Aún faltan configuración de Modal, credenciales, definición de schemas, código y pruebas.
+El roadmap detallado está al final de [BOT.md](BOT.md). La primera etapa de implementación prevista es un webhook mínimo, el parser de comandos, un worker en CPU y el flujo de captura de videos con escritura de notas en R2. Los recordatorios con QStash y Calendar están diseñados, pero aún faltan OAuth, secretos, schemas, código y pruebas.

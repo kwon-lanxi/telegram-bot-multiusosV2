@@ -1,6 +1,6 @@
 # 📓 BOT — Documento vivo de construcción
 
-> Documento vivo del proyecto. Actualizado: 2026-10-25. Dividido en **Parte A (Arquitectura)** y **Parte B (Features)**.
+> Documento vivo del proyecto. Actualizado: 2026-10-26. Dividido en **Parte A (Arquitectura)** y **Parte B (Features)**.
 
 ---
 
@@ -32,6 +32,7 @@ Bot de Telegram **webhook** sobre **Modal** (serverless, facturación por segund
 | 2026-10-26 | Clasificación de intención para audios → **Jev / TypeSafe** antes de decidir si se archiva | Choice/Score/Noul estructurados; no genera transcripciones ni notas libres |
 | 2026-10-26 | ASR de audio: **Qwen3-ASR local como ruta preferida**, Groq Whisper como alternativa seleccionable | Decidir ruta por privacidad, tamaño/duración, disponibilidad y calidad; eliminar temporales tras procesar |
 | 2026-10-26 | Separar interfaces de IA: **Jev/Liquid d1 para decisiones** y **API OpenAI-compatible para generación** | Liquid d1 usa integración TypeSafe; modelos LFM servidos por vLLM/SGLang pueden exponer OpenAI-compatible, pero no asumir que Liquid API alojada ofrece chat OpenAI-compatible |
+| 2026-10-26 | Recordatorios: Jev filtra intención; LLM extrae campos; **QStash entrega a la hora programada** y Google Calendar crea el evento | No guardar el audio; mantener un log estructurado en Obsidian/R2; diseñar operaciones idempotentes y reconciliables |
 
 ## A.3 Precio de referencia (Modal, verificado 2026-10-25)
 
@@ -93,7 +94,7 @@ No asumir que “todos los pesos caben” equivale a poder ejecutar simultáneam
 | # | Función | Hardware | Modelos/Jobs | Snapshots |
 |---|---|---|---|---|
 | F0 | `webhook` | CPU (0.25 core) | FastAPI receptor; parsea `{url`/`!{url`/`!!{url`, notas de texto, notas de voz; responde 200 | — |
-| F1 | `worker` | CPU 2 core | yt-dlp, ffmpeg, R2 I/O, llamadas a F2–F6, Jev para decisiones, API LLM OpenAI-compatible para generación, envío a Telegram | CPU snapshot |
+| F1 | `worker` | CPU 2 core | yt-dlp, ffmpeg, R2 I/O, llamadas a F2–F6, Jev para decisiones, API LLM OpenAI-compatible para generación, QStash, Google Calendar y Telegram | CPU snapshot |
 | F2 | `ASR` | **L4** | audio.cpp + Qwen3-ASR-1.7B Q8_0 | CPU+GPU snapshot (alpha) |
 | F3 | `OCR` | **L4** | vLLM + Unlimited-OCR FP8/BF16 | CPU snapshot (+GPU v1.5) |
 | F4 | `TTS` | **L4** | `qwen-tts` BF16 + FlashAttention2 | CPU snapshot |
@@ -207,7 +208,7 @@ Jev procesa el **texto transcrito**, no el archivo de audio, y responde con prim
 Enrutado v1:
 
 - **nota**: aplicar “mejoramiento con IA” (limpiar puntuación/repeticiones sin cambiar sentido, extraer título/temas/resumen según `voice_note_schema`) y guardar la nota estructurada en R2/Obsidian. Mantener la transcripción original o una sección de transcripción fiel para trazabilidad. Ésta es la única clase de audio que se guarda como nota automáticamente.
-- **recordatorio**: no convertirlo silenciosamente en nota ni persistir la transcripción. Requiere una feature de recordatorios y confirmación/fecha/hora clara; hasta implementar esa feature, responder que fue detectado pero no programado y pedir aclaración/confirmación según corresponda. No inventar fecha ni prometer notificación.
+- **recordatorio**: enrutar a B.12. No guardar audio ni transcripción completa; crear el recordatorio sólo tras extraer y validar campos/fecha/hora y resolver ambigüedades. Si falta información crítica, pedir aclaración y no prometer que quedó programado.
 - **mandado/orden** (p. ej. “hazme un esquema”, “redacta una nota sobre X”): tratar como petición accionable, no como nota autobiográfica; no persistir la transcripción como nota. En v1 contestar o pedir aclaración según las capacidades disponibles. Una instrucción explícita separada para archivar (“guarda también este audio como nota”) debe cambiar el destino sólo después de una decisión/confirmación clara, no por inferencia del clasificador.
 - **otro/no claro**: no persistir ni archivar automáticamente; preguntar si quiere guardarlo como nota o procesarlo como una acción. El contenido temporal se elimina al cerrar el flujo.
 
@@ -355,6 +356,7 @@ Separar los proveedores por **tipo de tarea**, no esconderlos detrás de un úni
 |---|---|---|---|---|
 | `Transcriber` | ASR de audios y pistas extraídas | Qwen3-ASR local; Groq Whisper como ruta API | Audio → texto + idioma/timestamps/metadata disponibles | Qwen local preferido; Groq sólo si habilitado y permitido por privacidad |
 | `IntentClassifier` | Decidir recordatorio/mandado/nota/otro | Jev (TypeSafe System One); Liquid d1 cuando se use su integración documentada | Texto/estado → Choice, Score, Noul | No produce texto libre; definir umbrales y ruta para baja confianza |
+| `ReminderExtractor` | Normalizar fecha/hora, zona horaria, título y detalles | LLM generativo compatible con OpenAI SDK | Transcripción temporal + contexto → esquema JSON validado | No agenda si hay ambigüedad; normaliza el texto y descarta audio/transcripción al terminar |
 | `NoteGenerator` | Mejorar transcripción y producir nota Markdown/JSON | API generativa compatible con OpenAI SDK; modelo/proveedor concreto pendiente | Prompt + fuente/metadatos → JSON con Structured Outputs cuando el endpoint lo soporte | No asumir que todo endpoint compatible implementa todas las funciones de OpenAI; comprobar schema mode/modelo |
 | `LocalGenerator` (opcional) | Generación local / respaldo sin enviar transcripción fuera | Liquid LFM pequeño servido por vLLM/SGLang, si se prueba | Texto → texto/JSON | OpenAI-compatible sólo en el endpoint de serving local; validar idiomas y calidad antes de usar |
 
@@ -374,6 +376,59 @@ Separar los proveedores por **tipo de tarea**, no esconderlos detrás de un úni
 - Las claves de Groq, TypeSafe/Liquid y el proveedor generativo se guardan como Modal Secrets; nunca en repo, notas, logs ni respuestas de Telegram.
 - Antes de enviar audio/transcripciones a servicios externos, considerar que son datos personales: configurar fallback externo conscientemente y documentar retención/región/uso de datos según los términos vigentes de cada proveedor.
 
+## B.12 Recordatorios — Jev → LLM → QStash + Google Calendar → log Obsidian
+
+### Flujo de creación desde un audio
+
+1. Transcribir el audio temporalmente según B.2. Jev decide `recordatorio` frente a `nota`, `mandado` u `otro`; la baja confianza deriva a aclaración, nunca a programación automática.
+2. Si Jev clasifica `recordatorio`, pasar la transcripción **sólo en memoria** al LLM generativo (B.11) para extraer un objeto estructurado: `title`, `description` concisa, `due_at` ISO-8601, `timezone` IANA, `duration_minutes` si aplica, `notify_at`/anticipación y cualquier ubicación. No aceptar fechas inventadas por el modelo: cotejar con el texto y la zona horaria configurada; ante hora o fecha ambigua, preguntar al usuario.
+3. Confirmar al usuario el resumen y la hora local si la interpretación no es inequívoca o la configuración requiere confirmación. No crear side effects hasta tener los campos requeridos.
+4. Crear el evento en **Google Calendar** usando `events.insert` en `primary` (o calendario configurado), con start/end y zona horaria. OAuth de usuario con el scope mínimo compatible, preferiblemente `calendar.events.owned` si basta para el calendario propio; almacenar refresh token y client secret como secretos protegidos, nunca en el repo. El flujo necesita autorización inicial explícita del usuario.
+5. Programar en **QStash** un mensaje one-shot al endpoint HTTPS público del bot con `Upstash-Not-Before` (epoch UTC) para `notify_at` — por defecto `due_at`, si el usuario no configura anticipación. El handler valida `Upstash-Signature`, el estado y la identidad del recordatorio antes de enviar un Telegram DM. QStash gestiona la entrega/reintentos; no es el registro de verdad del recordatorio ni sustituye Calendar.
+6. Escribir/actualizar el log de Obsidian/R2 con estado, hora local, y los IDs de QStash y Calendar. Responder al usuario con el título, la hora y confirmación de que se creó el evento y quedó programado el aviso.
+
+### Log persistente, sin audio
+
+El audio y la transcripción completa **no se guardan** en R2, Volume ni en la nota de log. Se propone una nota diaria, por ejemplo `Registros/Recordatorios/2026-10-26.md`, con frontmatter de tipo/fecha y una entrada por recordatorio:
+
+```yaml
+---
+type: reminder-log
+date: 2026-10-26
+---
+reminders:
+  - id: reminder_<uuid>
+    title: "Llamar a la clínica"
+    due_at: "2026-10-27T09:00:00-07:00"
+    timezone: "America/Los_Angeles"
+    notify_at: "2026-10-27T09:00:00-07:00"
+    status: "scheduled" # needs_clarification | creating | scheduled | sent | failed | cancelled
+    source: "telegram_voice"
+    created_at: "2026-10-26T18:40:00Z"
+    qstash_message_id: "..."
+    google_calendar_event_id: "..."
+    last_error: null
+```
+
+El log conserva el contenido normalizado necesario para administrar el recordatorio; no conserva el audio ni el texto íntegro reconocido. `last_error` debe ser breve y no incluir credenciales, tokens ni transcripción privada. La fecha/ruta del archivo sigue la zona horaria configurada por el usuario (decisión pendiente); los timestamps del registro deben ser RFC3339 con offset.
+
+### Consistencia, edición y cancelación
+
+Calendar y QStash no comparten transacción. Usar `reminder_id` estable e idempotente, escribir un estado `creating` y persistir cada ID externo al recibirlo; el handler de QStash debe tolerar entregas repetidas (QStash puede reintentar) y comprobar el estado antes de avisar. Usar deduplicación de QStash al publicar cuando corresponda, además de idempotencia propia: la ventana documentada de deduplicación es de 10 minutos, no una garantía de unicidad permanente.
+
+Si Calendar se creó y QStash falla (o viceversa), marcar `failed`/`creating` con la etapa pendiente, intentar compensar cuando sea seguro o reconciliar en reintento sin crear un segundo evento/aviso. Un recordatorio sólo responde “programado” cuando ambos sistemas y el log reflejan los IDs/estado correspondiente.
+
+Para editar: actualizar el evento existente y cancelar/reschedule el mensaje pendiente de QStash; conservar los IDs y anotar el cambio en log. Para cancelar: cancelar el mensaje QStash pendiente, borrar o marcar cancelado el evento de Calendar según la política configurada, actualizar el estado `cancelled` y confirmar al usuario. Tras el disparo, pasar de `scheduled` a `sent` sólo tras el resultado de Telegram; fallos persistentes van a `failed` para poder corregir/reintentar.
+
+### Decisiones aún por fijar
+
+- Zona IANA por defecto y cómo se configura/cambia.
+- Si se requiere siempre confirmación explícita antes de crear o basta con hacerlo cuando Jev/LLM detecten ambigüedad.
+- Duración predeterminada del evento (Calendar requiere start y end) y anticipación por defecto del aviso QStash.
+- Política de cancelación en Calendar (borrar evento o dejarlo marcado como cancelado) y edición desde Telegram.
+- Credenciales OAuth de Google y URL pública HTTPS/verificación de firma del endpoint QStash. Los secretos serán `QSTASH_TOKEN`, claves actuales/siguientes para verificar firmas, y credenciales/tokens de Google OAuth, gestionados como secretos Modal.
+- Formato final y ubicación del diario de logs en la bóveda Obsidian.
+
 ## Fuentes de referencia consultadas
 
 - Modal cold starts: https://modal.com/docs/guide/cold-start
@@ -381,6 +436,16 @@ Separar los proveedores por **tipo de tarea**, no esconderlos detrás de un úni
 - EmbeddingGemma 2 en Sentence Transformers (texto/imagen/audio/video; L4 BF16): https://ai.google.dev/gemma/docs/embeddinggemma/fine-tuning-multimodal-embeddinggemma-with-sentence-transformers
 - Extractores soportados por yt-dlp (el propio proyecto advierte que el soporte puede romperse y debe probarse): https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md
 - Telegram Bot API y límites/local Bot API server: https://core.telegram.org/bots/api
+- QStash quickstart (mensajes, scheduling y SDK Python): https://upstash.com/docs/qstash/overall/getstarted
+- QStash delay/`Upstash-Not-Before`: https://upstash.com/docs/qstash/features/delay
+- QStash schedules y zonas horarias: https://upstash.com/docs/qstash/features/schedules
+- QStash firma de solicitudes: https://upstash.com/docs/qstash/features/security
+- QStash deduplicación: https://upstash.com/docs/qstash/features/deduplication
+- QStash cancelar mensaje: https://upstash.com/docs/qstash/api-reference/messages/cancel-a-message
+- Google Calendar crear eventos: https://developers.google.com/workspace/calendar/api/guides/create-events
+- Google Calendar `events.insert`: https://developers.google.com/workspace/calendar/api/v3/reference/events/insert
+- Google Calendar OAuth scopes: https://developers.google.com/workspace/calendar/api/auth
+- Google OAuth web server / refresh tokens: https://developers.google.com/identity/protocols/oauth2/web-server
 - Qwen3-ASR Hub: https://huggingface.co/Qwen/Qwen3-ASR-1.7B
 - Groq Speech-to-Text (modelos, idiomas, límites, timestamps): https://console.groq.com/docs/speech-to-text
 - TypeSafe Jev quickstart (Choice/Score/Noul y SDK): https://docs.typesafe.ai/introduction/quickstart
@@ -393,10 +458,11 @@ Separar los proveedores por **tipo de tarea**, no esconderlos detrás de un úni
 
 ## Pendientes (roadmap v1)
 
-- [ ] Configurar Modal: `modal setup` + secretos (`TELEGRAM_TOKEN`, credenciales R2, clave del proveedor generativo; `TYPESAFE_API_KEY` si se usa Jev y `GROQ_API_KEY` sólo si se habilita Groq)
+- [ ] Configurar Modal: `modal setup` + secretos (`TELEGRAM_TOKEN`, credenciales R2, clave del proveedor generativo; `TYPESAFE_API_KEY` si se usa Jev y `GROQ_API_KEY` sólo si se habilita Groq; `QSTASH_TOKEN`, claves de firma y credenciales/tokens Google OAuth para recordatorios)
 - [ ] F0 webhook CPU: regex de los 3 comandos, notas de texto, upload de voz
 - [ ] F1 worker CPU: adaptadores de URL + extracción + enrutado de IA/ASR + escritura R2 (frontmatter Obsidian)
 - [ ] Contrato `IntentClassifier` Jev: Choice nota/recordatorio/mandado/otro + umbrales, abstención y aclaraciones
+- [ ] Recordatorios B.12: esquema LLM/validación de fecha-hora + QStash firmado/idempotente + OAuth Google Calendar + log estructurado Obsidian sin audio/transcripción completa
 - [ ] Contrato `Transcriber`: ruta Qwen local preferida, fallback Groq opt-in, chunking y borrado de temporales
 - [ ] Contrato `NoteGenerator` OpenAI-compatible: provider/base_url/model/capacidades; probar Structured Outputs con proveedor elegido
 - [ ] F2 ASR L4: audio.cpp + Qwen3-ASR-1.7B Q8_0 + `download_models()` + Volume
