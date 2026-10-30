@@ -1,0 +1,26 @@
+[project]
+name = "bot-archivista"
+version = "0.1.0"
+description = "Bot de Telegram archivista de vida — captura cruda → R2 → Obsidian (v0.1)"
+requires-python = ">=3.12"
+dependencies = [
+    "boto3>=1.35",
+    "python-dotenv>=1.0",
+    "requests>=2.32",
+    "modal>=1.0",
+    "fastapi[standard]>=0.115",
+    "httpx>=0.27",
+]
+
+[dependency-groups]
+dev = ["pytest>=8.3", "moto[s3]>=5.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+include = ["bot"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
